@@ -7,7 +7,7 @@ import { loadHistory, loadSubjects, loadThreshold, saveHistory, saveSubjects, sa
 import type { HistoryItem, Subject } from './lib/storage'
 import { auth, db, firebaseConfigured } from './lib/firebase'
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth'
-import { addDoc, collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, setDoc, updateDoc, where } from 'firebase/firestore'
 
 const demoSubjects: Subject[] = [
   { id: 'ml', subject_name: 'Machine Learning', total_classes: 30, attended_classes: 27, classes_until_ia: 5 },
@@ -32,6 +32,7 @@ function App() {
   const subjectCount = useRef(subjects.length)
   const historyCount = useRef(history.length)
   const subjectsRef = useRef(subjects)
+  const pendingSubjectWrites = useRef(new Set<string>())
 
   useEffect(() => saveSubjects(subjects), [subjects])
   useEffect(() => saveHistory(history), [history])
@@ -52,6 +53,9 @@ function App() {
       query(collection(firestore, 'subjects'), where('userId', '==', session.id)),
       (snapshot) => {
         const cloudSubjects = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Subject)
+        const cloudIds = new Set(cloudSubjects.map((subject) => subject.id))
+        const pendingSubjectMissing = [...pendingSubjectWrites.current].some((id) => !cloudIds.has(id))
+        if (pendingSubjectWrites.current.size > 0 && (cloudSubjects.length < subjectsRef.current.length || pendingSubjectMissing)) return
         if (cloudSubjects.length > 0) {
           setSubjects(cloudSubjects)
           return
@@ -61,7 +65,7 @@ function App() {
         const migrationKey = `attendance-tracker-migrated-${session.id}`
         if (subjectsRef.current.length > 0 && !window.localStorage.getItem(migrationKey)) {
           window.localStorage.setItem(migrationKey, 'started')
-          Promise.all(subjectsRef.current.map(({ id: _localId, ...subject }) => addDoc(collection(firestore, 'subjects'), { ...subject, userId: session.id })))
+          Promise.all(subjectsRef.current.map((subject) => setDoc(doc(firestore, 'subjects', subject.id), { ...subject, userId: session.id })))
             .then(() => window.localStorage.setItem(migrationKey, 'complete'))
             .catch(() => {
               window.localStorage.removeItem(migrationKey)
@@ -125,13 +129,18 @@ function App() {
 
   async function saveSubject(values: Omit<Subject, 'id'>, existingId?: string) {
     setSaving(true)
-    const next = existingId ? subjects.map((subject) => subject.id === existingId ? { ...subject, ...values } : subject) : [...subjects, { ...values, id: crypto.randomUUID() }]
+    const subjectId = existingId ?? crypto.randomUUID()
+    const next = existingId ? subjects.map((subject) => subject.id === existingId ? { ...subject, ...values } : subject) : [...subjects, { ...values, id: subjectId }]
     setSubjects(next)
     if (db && session && firebaseConfigured) {
-      if (existingId) await updateDoc(doc(db, 'subjects', existingId), values)
-      else {
-        const created = await addDoc(collection(db, 'subjects'), { ...values, userId: session.id })
-        setSubjects((current) => current.map((subject) => subject.id === next[next.length - 1].id ? { ...subject, id: created.id } : subject))
+      pendingSubjectWrites.current.add(subjectId)
+      try {
+        if (existingId) await updateDoc(doc(db, 'subjects', existingId), values)
+        else await setDoc(doc(db, 'subjects', subjectId), { ...values, userId: session.id })
+      } catch {
+        setMessage('Could not sync this subject yet. It remains saved on this device.')
+      } finally {
+        pendingSubjectWrites.current.delete(subjectId)
       }
     }
     setSaving(false)
@@ -141,7 +150,16 @@ function App() {
   async function deleteSubject(subject: Subject) {
     if (!window.confirm(`Are you sure you want to delete ${subject.subject_name}?\n\nThis cannot be undone.`)) return
     setSubjects((current) => current.filter((item) => item.id !== subject.id))
-    if (db && session && firebaseConfigured) await deleteDoc(doc(db, 'subjects', subject.id))
+    if (db && session && firebaseConfigured) {
+      pendingSubjectWrites.current.add(subject.id)
+      try {
+        await deleteDoc(doc(db, 'subjects', subject.id))
+      } catch {
+        setMessage('Could not delete this subject from Firebase. It remains available on another device.')
+      } finally {
+        pendingSubjectWrites.current.delete(subject.id)
+      }
+    }
   }
 
   async function updateSubject(subject: Subject, action: 'attend' | 'bunk' | 'total' | 'ia', amount = 1) {
