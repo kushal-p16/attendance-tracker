@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ArrowDownUp, BookOpen, Check, ChevronDown, Clock3, History, LogOut, Menu, Pencil, Plus, ShieldCheck, Trash2, TrendingUp, X } from 'lucide-react'
 import './App.css'
@@ -29,10 +29,14 @@ function App() {
   const [selectedHistory, setSelectedHistory] = useState<Subject | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+  const subjectCount = useRef(subjects.length)
+  const historyCount = useRef(history.length)
 
   useEffect(() => saveSubjects(subjects), [subjects])
   useEffect(() => saveHistory(history), [history])
   useEffect(() => saveThreshold(threshold), [threshold])
+  useEffect(() => { subjectCount.current = subjects.length }, [subjects.length])
+  useEffect(() => { historyCount.current = history.length }, [history.length])
 
   useEffect(() => {
     if (!auth) return
@@ -47,8 +51,12 @@ function App() {
         getDocs(query(collection(firestore, 'subjects'), where('userId', '==', session.id))),
         getDocs(query(collection(firestore, 'attendance_history'), where('userId', '==', session.id))),
       ])
-      setSubjects(subjectSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Subject))
-      setHistory(historySnapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as HistoryItem))
+      const cloudSubjects = subjectSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Subject)
+      const cloudHistory = historySnapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as HistoryItem)
+
+      // A temporary empty cloud response must not wipe the browser's saved subjects.
+      if (cloudSubjects.length > 0 || subjectCount.current === 0) setSubjects(cloudSubjects)
+      if (cloudHistory.length > 0 || historyCount.current === 0) setHistory(cloudHistory)
     }
     loadCloudData().catch(() => setMessage('Could not load your Firebase data. Check your connection and try again.'))
   }, [session])
