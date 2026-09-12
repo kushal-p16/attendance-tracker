@@ -33,6 +33,7 @@ function App() {
   const historyCount = useRef(history.length)
   const subjectsRef = useRef(subjects)
   const pendingSubjectWrites = useRef(new Set<string>())
+  const migrationInFlight = useRef(false)
 
   useEffect(() => saveSubjects(subjects), [subjects])
   useEffect(() => saveHistory(history), [history])
@@ -61,16 +62,12 @@ function App() {
           return
         }
 
-        // Migrate older Chrome-only data once so it becomes shared account data.
-        const migrationKey = `attendance-tracker-migrated-${session.id}`
-        if (subjectsRef.current.length > 0 && !window.localStorage.getItem(migrationKey)) {
-          window.localStorage.setItem(migrationKey, 'started')
+        // Retry migrating older Chrome-only data until Firestore confirms it.
+        if (subjectsRef.current.length > 0 && !migrationInFlight.current) {
+          migrationInFlight.current = true
           Promise.all(subjectsRef.current.map((subject) => setDoc(doc(firestore, 'subjects', subject.id), { ...subject, userId: session.id })))
-            .then(() => window.localStorage.setItem(migrationKey, 'complete'))
-            .catch(() => {
-              window.localStorage.removeItem(migrationKey)
-              setMessage('Could not upload your saved subjects yet. They are still safe on this device.')
-            })
+            .catch(() => setMessage('Could not upload your saved subjects yet. They are still safe on this device.'))
+            .finally(() => { migrationInFlight.current = false })
           return
         }
 
