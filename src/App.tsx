@@ -79,7 +79,10 @@ function App() {
       const result = authMode === 'login' ? await signInWithEmailAndPassword(auth, email, password) : await createUserWithEmailAndPassword(auth, email, password)
       if (!result.user) setMessage('Unable to sign in. Please try again.')
     } catch (error) {
-      setMessage(error instanceof Error ? error.message.replace('Firebase: ', '') : 'Unable to sign in. Check your details and try again.')
+      const errorCode = error instanceof Error ? error.message : ''
+      setMessage(errorCode.includes('auth/configuration-not-found')
+        ? 'Firebase Authentication is not enabled yet. In Firebase Console, open Authentication > Sign-in method and enable Email/Password, then try again.'
+        : errorCode.replace('Firebase: ', '') || 'Unable to sign in. Check your details and try again.')
     }
   }
 
