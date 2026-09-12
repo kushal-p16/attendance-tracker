@@ -139,7 +139,7 @@ function App() {
       <div className="content-heading"><div><p className="eyebrow">YOUR SUBJECTS</p><h2>Attendance overview</h2></div><label className="sort-control"><ArrowDownUp size={15} /><select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}><option value="attention">Lowest attendance first</option><option value="name">Subject name</option><option value="highest">Highest attendance first</option><option value="closest">Closest IA</option></select><ChevronDown size={14} /></label></div>
       {sortedSubjects.length === 0 ? <EmptyState onAdd={() => setModal('subject')} /> : <div className="subject-grid">{sortedSubjects.map((subject) => <SubjectCard key={subject.id} subject={subject} threshold={threshold} onUpdate={updateSubject} onEdit={() => { setEditing(subject); setModal('subject') }} onDelete={() => deleteSubject(subject)} onHistory={() => { setSelectedHistory(subject); setModal('history') }} />)}</div>}
     </main>
-    <footer><span>Attendance Tracker</span><span>Made for staying on track.</span></footer>
+    <footer><span>Attendance Tracker</span><span>Made for staying on track.</span><span className="watermark">Created by KUSHAL P</span></footer>
     {modal === 'subject' && <SubjectModal initial={editing} onClose={() => setModal(null)} onSave={saveSubject} />}
     {modal === 'settings' && <SettingsModal threshold={threshold} setThreshold={setThreshold} email={session.email} onClose={() => setModal(null)} onSignOut={signOut} />}
     {modal === 'history' && selectedHistory && <HistoryModal subject={selectedHistory} history={history.filter((item) => item.subject_id === selectedHistory.id)} onClose={() => setModal(null)} />}
