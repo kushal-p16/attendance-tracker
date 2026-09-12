@@ -7,7 +7,7 @@ import { loadHistory, loadSubjects, loadThreshold, saveHistory, saveSubjects, sa
 import type { HistoryItem, Subject } from './lib/storage'
 import { auth, db, firebaseConfigured } from './lib/firebase'
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth'
-import { addDoc, collection, deleteDoc, doc, getDocs, query, updateDoc, where } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore'
 
 const demoSubjects: Subject[] = [
   { id: 'ml', subject_name: 'Machine Learning', total_classes: 30, attended_classes: 27, classes_until_ia: 5 },
@@ -20,7 +20,7 @@ type SortMode = 'attention' | 'name' | 'highest' | 'closest'
 function App() {
   const [session, setSession] = useState<{ id: string; email?: string } | null>(firebaseConfigured ? null : { id: 'browser-user', email: 'student@browser.local' })
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
-  const [subjects, setSubjects] = useState<Subject[]>(() => loadSubjects(demoSubjects))
+  const [subjects, setSubjects] = useState<Subject[]>(() => loadSubjects(firebaseConfigured ? [] : demoSubjects))
   const [history, setHistory] = useState<HistoryItem[]>(loadHistory)
   const [threshold, setThreshold] = useState(() => loadThreshold(85))
   const [sortMode, setSortMode] = useState<SortMode>('attention')
@@ -31,12 +31,14 @@ function App() {
   const [message, setMessage] = useState('')
   const subjectCount = useRef(subjects.length)
   const historyCount = useRef(history.length)
+  const subjectsRef = useRef(subjects)
 
   useEffect(() => saveSubjects(subjects), [subjects])
   useEffect(() => saveHistory(history), [history])
   useEffect(() => saveThreshold(threshold), [threshold])
   useEffect(() => { subjectCount.current = subjects.length }, [subjects.length])
   useEffect(() => { historyCount.current = history.length }, [history.length])
+  useEffect(() => { subjectsRef.current = subjects }, [subjects])
 
   useEffect(() => {
     if (!auth) return
@@ -46,19 +48,42 @@ function App() {
   useEffect(() => {
     if (!session || !db || !firebaseConfigured) return
     const firestore = db
-    const loadCloudData = async () => {
-      const [subjectSnapshot, historySnapshot] = await Promise.all([
-        getDocs(query(collection(firestore, 'subjects'), where('userId', '==', session.id))),
-        getDocs(query(collection(firestore, 'attendance_history'), where('userId', '==', session.id))),
-      ])
-      const cloudSubjects = subjectSnapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Subject)
-      const cloudHistory = historySnapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as HistoryItem)
+    const unsubscribeSubjects = onSnapshot(
+      query(collection(firestore, 'subjects'), where('userId', '==', session.id)),
+      (snapshot) => {
+        const cloudSubjects = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as Subject)
+        if (cloudSubjects.length > 0) {
+          setSubjects(cloudSubjects)
+          return
+        }
 
-      // A temporary empty cloud response must not wipe the browser's saved subjects.
-      if (cloudSubjects.length > 0 || subjectCount.current === 0) setSubjects(cloudSubjects)
-      if (cloudHistory.length > 0 || historyCount.current === 0) setHistory(cloudHistory)
-    }
-    loadCloudData().catch(() => setMessage('Could not load your Firebase data. Check your connection and try again.'))
+        // Migrate older Chrome-only data once so it becomes shared account data.
+        const migrationKey = `attendance-tracker-migrated-${session.id}`
+        if (subjectsRef.current.length > 0 && !window.localStorage.getItem(migrationKey)) {
+          window.localStorage.setItem(migrationKey, 'started')
+          Promise.all(subjectsRef.current.map(({ id: _localId, ...subject }) => addDoc(collection(firestore, 'subjects'), { ...subject, userId: session.id })))
+            .then(() => window.localStorage.setItem(migrationKey, 'complete'))
+            .catch(() => {
+              window.localStorage.removeItem(migrationKey)
+              setMessage('Could not upload your saved subjects yet. They are still safe on this device.')
+            })
+          return
+        }
+
+        // Keep the offline cache visible if a reconnect briefly reports an empty result.
+        if (subjectsRef.current.length === 0) setSubjects(cloudSubjects)
+      },
+      () => setMessage('Could not sync subjects. Your latest changes remain saved on this device.')
+    )
+    const unsubscribeHistory = onSnapshot(
+      query(collection(firestore, 'attendance_history'), where('userId', '==', session.id)),
+      (snapshot) => {
+        const cloudHistory = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as HistoryItem)
+        if (cloudHistory.length > 0 || historyCount.current === 0) setHistory(cloudHistory)
+      },
+      () => setMessage('Could not sync attendance history. Your subject data is still saved.')
+    )
+    return () => { unsubscribeSubjects(); unsubscribeHistory() }
   }, [session])
 
   const sortedSubjects = useMemo(() => [...subjects].sort((a, b) => {
